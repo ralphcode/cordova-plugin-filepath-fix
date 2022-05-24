@@ -26,12 +26,12 @@ import org.json.JSONException;
 import java.io.IOException;
 import java.io.OutputStream;
 import android.content.pm.ApplicationInfo;
-import org.apache.commons.io.IOUtils;
 
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.List;
 import java.io.File;
+import java.util.Objects;
 
 public class FilePath extends CordovaPlugin {
 
@@ -78,22 +78,17 @@ public class FilePath extends CordovaPlugin {
         if (action.equals("resolveNativePath")) {
             if (PermissionHelper.hasPermission(this, READ)) {
                 resolveNativePath();
-            }
-            else {
+            } else {
                 getReadPermission(READ_REQ_CODE);
             }
-
             return true;
         }
         else {
             JSONObject resultObj = new JSONObject();
-
             resultObj.put("code", INVALID_ACTION_ERROR_CODE);
             resultObj.put("message", "Invalid action.");
-
             callbackContext.error(resultObj);
         }
-
         return false;
     }
 
@@ -101,15 +96,11 @@ public class FilePath extends CordovaPlugin {
         JSONObject resultObj = new JSONObject();
         /* content:///... */
         Uri pvUrl = Uri.parse(this.uriStr);
-
         Log.d(TAG, "URI: " + this.uriStr);
 
         Context appContext = this.cordova.getActivity().getApplicationContext();
-
-        String filePath = getFilePathFromURI(appContext, pvUrl);
-        if (filePath.equals(GET_PATH_ERROR_ID) || filePath.equals(GET_CLOUD_PATH_ERROR_ID)) {
-            filePath = getPath(appContext, pvUrl);
-        }
+        String filePath = getFilePathFromURI(appContext, pvUrl); // Load and save file locally
+        // filePath = getPath(appContext, pvUrl); // Resolve _data error
 
         //check result; send error/success callback
         if (filePath.equals(GET_PATH_ERROR_ID)) {
@@ -126,26 +117,52 @@ public class FilePath extends CordovaPlugin {
         }
     }
 
-     public static String getFilePathFromURI(Context context, Uri contentUri) {
+    public static boolean createFileFromStream(InputStream ins, File destination) {
+        try (OutputStream os = new FileOutputStream(destination)) {
+            byte[] buffer = new byte[4096];
+            int length;
+            while ((length = ins.read(buffer)) > 0) {
+                os.write(buffer, 0, length);
+            }
+            os.flush();
+            return true;
+        } catch (Exception ex) {
+            Log.e("Save File", ex.getMessage());
+            ex.printStackTrace();
+        }
+        return false;
+    }
+
+    public static File getFile(Context context, Uri uri) {
+        try (InputStream ins = context.getContentResolver().openInputStream(uri)) {
+            File destinationFilename = new File(context.getFilesDir().getPath() + File.separatorChar + queryName(context, uri));
+            createFileFromStream(ins, destinationFilename);
+            return destinationFilename;
+        } catch (Exception ex) {
+            Log.e("Save File", ex.getMessage());
+            ex.printStackTrace();
+        }
+        return null;
+    }
+
+    private static String queryName(Context context, Uri uri) {
+        Cursor returnCursor =
+                context.getContentResolver().query(uri, null, null, null, null);
+        assert returnCursor != null;
+        int nameIndex = returnCursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+        returnCursor.moveToFirst();
+        String name = returnCursor.getString(nameIndex);
+        returnCursor.close();
+        return name;
+    }
+
+     public String getFilePathFromURI(Context context, Uri contentUri) {
         //copy file and send new file path
         String fileName = getFileName(contentUri);
         if (!TextUtils.isEmpty(fileName)) {
-            File folder = new File (Environment.getExternalStorageDirectory().getPath() +
-                    File.separator +  getApplicationName(context));
-
-            boolean success = true;
-
-            if (!folder.exists()) {
-                success = folder.mkdirs();
-            }
-
-            if (success) {
-                File copyFile = new File(Environment.getExternalStorageDirectory().getPath() +
-                        File.separator +  getApplicationName(context) + File.separator + fileName);
-                copy(context, contentUri, copyFile);
-                return copyFile.getAbsolutePath();
-            }
-
+            Context appContext = this.cordova.getActivity().getApplicationContext();
+            File f = getFile(appContext, contentUri);
+            return f.getAbsolutePath();
         }
         return null;
     }
@@ -161,19 +178,6 @@ public class FilePath extends CordovaPlugin {
         return fileName;
     }
 
-    public static void copy(Context context, Uri srcUri, File dstFile) {
-        try {
-            InputStream inputStream = context.getContentResolver().openInputStream(srcUri);
-            if (inputStream == null) return;
-            OutputStream outputStream = new FileOutputStream(dstFile);
-            IOUtils.copy(inputStream, outputStream);
-            inputStream.close();
-            outputStream.close();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
-    }
-
     public static String getApplicationName(Context context) {
         ApplicationInfo applicationInfo = context.getApplicationInfo();
         int stringId = applicationInfo.labelRes;
@@ -186,7 +190,6 @@ public class FilePath extends CordovaPlugin {
                 JSONObject resultObj = new JSONObject();
                 resultObj.put("code", 3);
                 resultObj.put("message", "Filesystem permission was denied.");
-
                 this.callback.error(resultObj);
                 return;
             }
