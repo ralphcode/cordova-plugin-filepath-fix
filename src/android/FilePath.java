@@ -23,6 +23,11 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 import org.json.JSONException;
 
+import java.io.IOException;
+import java.io.OutputStream;
+import android.content.pm.ApplicationInfo;
+import org.apache.commons.io.IOUtils;
+
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.util.List;
@@ -100,28 +105,80 @@ public class FilePath extends CordovaPlugin {
         Log.d(TAG, "URI: " + this.uriStr);
 
         Context appContext = this.cordova.getActivity().getApplicationContext();
-        String filePath = getPath(appContext, pvUrl);
+
+        String filePath = getFilePathFromURI(appContext, pvUrl);
+        if (filePath.equals(GET_PATH_ERROR_ID) || filePath.equals(GET_CLOUD_PATH_ERROR_ID)) {
+            filePath = getPath(appContext, pvUrl);
+        }
 
         //check result; send error/success callback
-        if (filePath == GET_PATH_ERROR_ID) {
+        if (filePath.equals(GET_PATH_ERROR_ID)) {
             resultObj.put("code", GET_PATH_ERROR_CODE);
             resultObj.put("message", "Unable to resolve filesystem path.");
-
             this.callback.error(resultObj);
-        }
-        else if (filePath.equals(GET_CLOUD_PATH_ERROR_ID)) {
+        } else if (filePath.equals(GET_CLOUD_PATH_ERROR_ID)) {
             resultObj.put("code", GET_CLOUD_PATH_ERROR_CODE);
             resultObj.put("message", "Files from cloud cannot be resolved to filesystem, download is required.");
-
             this.callback.error(resultObj);
-        }
-        else {
+        } else {
             Log.d(TAG, "Filepath: " + filePath);
-
             this.callback.success("file://" + filePath);
         }
     }
 
+     public static String getFilePathFromURI(Context context, Uri contentUri) {
+        //copy file and send new file path
+        String fileName = getFileName(contentUri);
+        if (!TextUtils.isEmpty(fileName)) {
+            File folder = new File (Environment.getExternalStorageDirectory().getPath() +
+                    File.separator +  getApplicationName(context));
+
+            boolean success = true;
+
+            if (!folder.exists()) {
+                success = folder.mkdirs();
+            }
+
+            if (success) {
+                File copyFile = new File(Environment.getExternalStorageDirectory().getPath() +
+                        File.separator +  getApplicationName(context) + File.separator + fileName);
+                copy(context, contentUri, copyFile);
+                return copyFile.getAbsolutePath();
+            }
+
+        }
+        return null;
+    }
+
+    public static String getFileName(Uri uri) {
+        if (uri == null) return null;
+        String fileName = null;
+        String path = uri.getPath();
+        int cut = path.lastIndexOf('/');
+        if (cut != -1) {
+            fileName = path.substring(cut + 1);
+        }
+        return fileName;
+    }
+
+    public static void copy(Context context, Uri srcUri, File dstFile) {
+        try {
+            InputStream inputStream = context.getContentResolver().openInputStream(srcUri);
+            if (inputStream == null) return;
+            OutputStream outputStream = new FileOutputStream(dstFile);
+            IOUtils.copy(inputStream, outputStream);
+            inputStream.close();
+            outputStream.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static String getApplicationName(Context context) {
+        ApplicationInfo applicationInfo = context.getApplicationInfo();
+        int stringId = applicationInfo.labelRes;
+        return stringId == 0 ? applicationInfo.nonLocalizedLabel.toString() : context.getString(stringId);
+    }
 
     public void onRequestPermissionResult(int requestCode, String[] permissions, int[] grantResults) throws JSONException {
         for (int r : grantResults) {
@@ -262,7 +319,7 @@ public class FilePath extends CordovaPlugin {
     private static String getPathFromExtSD(String[] pathData) {
         final String type = pathData[0];
         final String relativePath = "/" + pathData[1];
-        String fullPath = "";
+        String fullPath;
 
         // on my Sony devices (4.4.4 & 5.1.1), `type` is a dynamic string
         // something like "71F8-2C0A", some kind of unique id per storage
@@ -294,6 +351,11 @@ public class FilePath extends CordovaPlugin {
         }
 
         fullPath = System.getenv("EXTERNAL_STORAGE") + relativePath;
+        if (fileExists(fullPath)) {
+            return fullPath;
+        }
+
+        fullPath = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS) + relativePath;
         if (fileExists(fullPath)) {
             return fullPath;
         }
